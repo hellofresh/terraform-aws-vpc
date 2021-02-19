@@ -64,6 +64,50 @@ resource "aws_vpc_ipv4_cidr_block_association" "this" {
   cidr_block = element(var.secondary_cidr_blocks, count.index)
 }
 
+resource "aws_default_security_group" "this" {
+  count = var.create_vpc && var.manage_default_security_group ? 1 : 0
+
+  vpc_id = aws_vpc.this[0].id
+
+  dynamic "ingress" {
+    for_each = var.default_security_group_ingress
+    content {
+      self             = lookup(ingress.value, "self", null)
+      cidr_blocks      = compact(split(",", lookup(ingress.value, "cidr_blocks", "")))
+      ipv6_cidr_blocks = compact(split(",", lookup(ingress.value, "ipv6_cidr_blocks", "")))
+      prefix_list_ids  = compact(split(",", lookup(ingress.value, "prefix_list_ids", "")))
+      security_groups  = compact(split(",", lookup(ingress.value, "security_groups", "")))
+      description      = lookup(ingress.value, "description", null)
+      from_port        = lookup(ingress.value, "from_port", 0)
+      to_port          = lookup(ingress.value, "to_port", 0)
+      protocol         = lookup(ingress.value, "protocol", "-1")
+    }
+  }
+
+  dynamic "egress" {
+    for_each = var.default_security_group_egress
+    content {
+      self             = lookup(egress.value, "self", null)
+      cidr_blocks      = compact(split(",", lookup(egress.value, "cidr_blocks", "")))
+      ipv6_cidr_blocks = compact(split(",", lookup(egress.value, "ipv6_cidr_blocks", "")))
+      prefix_list_ids  = compact(split(",", lookup(egress.value, "prefix_list_ids", "")))
+      security_groups  = compact(split(",", lookup(egress.value, "security_groups", "")))
+      description      = lookup(egress.value, "description", null)
+      from_port        = lookup(egress.value, "from_port", 0)
+      to_port          = lookup(egress.value, "to_port", 0)
+      protocol         = lookup(egress.value, "protocol", "-1")
+    }
+  }
+
+  tags = merge(
+    {
+      "Name" = format("%s", var.default_security_group_name)
+    },
+    var.tags,
+    var.default_security_group_tags,
+  )
+}
+
 ###################
 # DHCP Options Set
 ###################
@@ -109,7 +153,7 @@ resource "aws_vpc_dhcp_options_association" "this" {
 # Internet Gateway
 ###################
 resource "aws_internet_gateway" "this" {
-  count = var.create_vpc && length(var.public_subnets) > 0 ? 1 : 0
+  count = var.create_vpc && var.create_igw && length(var.public_subnets) > 0 ? 1 : 0
 
   vpc_id = local.vpc_id
 
@@ -133,9 +177,17 @@ resource "aws_internet_gateway" "this" {
 }
 
 resource "aws_egress_only_internet_gateway" "this" {
-  count = var.create_vpc && var.enable_ipv6 && local.max_subnet_length > 0 ? 1 : 0
+  count = var.create_vpc && var.create_egress_only_igw && var.enable_ipv6 && local.max_subnet_length > 0 ? 1 : 0
 
   vpc_id = local.vpc_id
+
+  tags = merge(
+    {
+      "Name" = format("%s", var.name)
+    },
+    var.tags,
+    var.igw_tags,
+  )
 }
 
 ################
@@ -166,7 +218,7 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route" "public_internet_gateway" {
-  count = var.create_vpc && length(var.public_subnets) > 0 ? 1 : 0
+  count = var.create_vpc && var.create_igw && length(var.public_subnets) > 0 ? 1 : 0
 
   route_table_id         = aws_route_table.public[0].id
   destination_cidr_block = "0.0.0.0/0"
@@ -178,7 +230,7 @@ resource "aws_route" "public_internet_gateway" {
 }
 
 resource "aws_route" "public_internet_gateway_ipv6" {
-  count = var.create_vpc && var.enable_ipv6 && length(var.public_subnets) > 0 ? 1 : 0
+  count = var.create_vpc && var.create_igw && var.enable_ipv6 && length(var.public_subnets) > 0 ? 1 : 0
 
   route_table_id              = aws_route_table.public[0].id
   destination_ipv6_cidr_block = "::/0"
@@ -215,12 +267,6 @@ resource "aws_route_table" "private" {
       ]
     ),
   )
-
-  lifecycle {
-    # When attaching VPN gateways it is common to define aws_vpn_gateway_route_propagation
-    # resources that manipulate the attributes of the routing table (typically for the private subnets)
-    ignore_changes = [propagating_vgws]
-  }
 }
 
 #################
@@ -235,23 +281,13 @@ resource "aws_route_table" "database" {
     {
       "Name" = "${var.name}-${var.database_subnet_suffix}"
     },
-    zipmap(
-      keys(var.tags),
-      [for v in values(var.tags) :
-        replace(replace(v, "%az%", element(var.azs, count.index)), "%name%", var.name)
-      ]
-    ),
-    zipmap(
-      keys(var.database_route_table_tags),
-      [for v in values(var.database_route_table_tags) :
-        replace(replace(v, "%az%", element(var.azs, count.index)), "%name%", var.name)
-      ]
-    ),
+    var.tags,
+    var.database_route_table_tags,
   )
 }
 
 resource "aws_route" "database_internet_gateway" {
-  count = var.create_vpc && var.create_database_subnet_route_table && length(var.database_subnets) > 0 && var.create_database_internet_gateway_route && false == var.create_database_nat_gateway_route ? 1 : 0
+  count = var.create_vpc && var.create_igw && var.create_database_subnet_route_table && length(var.database_subnets) > 0 && var.create_database_internet_gateway_route && false == var.create_database_nat_gateway_route ? 1 : 0
 
   route_table_id         = aws_route_table.database[0].id
   destination_cidr_block = "0.0.0.0/0"
@@ -265,7 +301,7 @@ resource "aws_route" "database_internet_gateway" {
 resource "aws_route" "database_nat_gateway" {
   count = var.create_vpc && var.create_database_subnet_route_table && length(var.database_subnets) > 0 && false == var.create_database_internet_gateway_route && var.create_database_nat_gateway_route && var.enable_nat_gateway ? local.nat_gateway_count : 0
 
-  route_table_id         = element(aws_route_table.private.*.id, count.index)
+  route_table_id         = element(aws_route_table.database.*.id, count.index)
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = element(aws_nat_gateway.this.*.id, count.index)
 
@@ -275,7 +311,7 @@ resource "aws_route" "database_nat_gateway" {
 }
 
 resource "aws_route" "database_ipv6_egress" {
-  count = var.create_vpc && var.enable_ipv6 && var.create_database_subnet_route_table && length(var.database_subnets) > 0 && var.create_database_internet_gateway_route ? 1 : 0
+  count = var.create_vpc && var.create_egress_only_igw && var.enable_ipv6 && var.create_database_subnet_route_table && length(var.database_subnets) > 0 && var.create_database_internet_gateway_route ? 1 : 0
 
   route_table_id              = aws_route_table.database[0].id
   destination_ipv6_cidr_block = "::/0"
@@ -298,18 +334,8 @@ resource "aws_route_table" "redshift" {
     {
       "Name" = "${var.name}-${var.redshift_subnet_suffix}"
     },
-    zipmap(
-      keys(var.tags),
-      [for v in values(var.tags) :
-        replace(replace(v, "%az%", element(var.azs, count.index)), "%name%", var.name)
-      ]
-    ),
-    zipmap(
-      keys(var.redshift_route_table_tags),
-      [for v in values(var.redshift_route_table_tags) :
-        replace(replace(v, "%az%", element(var.azs, count.index)), "%name%", var.name)
-      ]
-    ),
+    var.tags,
+    var.redshift_route_table_tags,
   )
 }
 
@@ -325,18 +351,8 @@ resource "aws_route_table" "elasticache" {
     {
       "Name" = "${var.name}-${var.elasticache_subnet_suffix}"
     },
-    zipmap(
-      keys(var.tags),
-      [for v in values(var.tags) :
-        replace(replace(v, "%az%", element(var.azs, count.index)), "%name%", var.name)
-      ]
-    ),
-    zipmap(
-      keys(var.elasticache_route_table_tags),
-      [for v in values(var.elasticache_route_table_tags) :
-        replace(replace(v, "%az%", element(var.azs, count.index)), "%name%", var.name)
-      ]
-    ),
+    var.tags,
+    var.elasticache_route_table_tags,
   )
 }
 
@@ -658,6 +674,27 @@ resource "aws_default_network_acl" "this" {
 
   default_network_acl_id = element(concat(aws_vpc.this.*.default_network_acl_id, [""]), 0)
 
+  # The value of subnet_ids should be any subnet IDs that are not set as subnet_ids
+  #   for any of the non-default network ACLs
+  subnet_ids = setsubtract(
+    compact(flatten([
+      aws_subnet.public.*.id,
+      aws_subnet.private.*.id,
+      aws_subnet.intra.*.id,
+      aws_subnet.database.*.id,
+      aws_subnet.redshift.*.id,
+      aws_subnet.elasticache.*.id,
+    ])),
+    compact(flatten([
+      aws_network_acl.public.*.subnet_ids,
+      aws_network_acl.private.*.subnet_ids,
+      aws_network_acl.intra.*.subnet_ids,
+      aws_network_acl.database.*.subnet_ids,
+      aws_network_acl.redshift.*.subnet_ids,
+      aws_network_acl.elasticache.*.subnet_ids,
+    ]))
+  )
+
   dynamic "ingress" {
     for_each = var.default_network_acl_ingress
     content {
@@ -704,10 +741,6 @@ resource "aws_default_network_acl" "this" {
       ]
     ),
   )
-
-  lifecycle {
-    ignore_changes = [subnet_ids]
-  }
 }
 
 ########################
@@ -1178,7 +1211,7 @@ resource "aws_route" "private_nat_gateway" {
 }
 
 resource "aws_route" "private_ipv6_egress" {
-  count = var.create_vpc && var.enable_ipv6 ? length(var.private_subnets) : 0
+  count = var.create_vpc && var.create_egress_only_igw && var.enable_ipv6 ? length(var.private_subnets) : 0
 
   route_table_id              = element(aws_route_table.private.*.id, count.index)
   destination_ipv6_cidr_block = "::/0"

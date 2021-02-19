@@ -15,12 +15,13 @@ locals {
 resource "aws_flow_log" "this" {
   count = local.enable_flow_log ? 1 : 0
 
-  log_destination_type = var.flow_log_destination_type
-  log_destination      = local.flow_log_destination_arn
-  log_format           = var.flow_log_log_format
-  iam_role_arn         = local.flow_log_iam_role_arn
-  traffic_type         = var.flow_log_traffic_type
-  vpc_id               = local.vpc_id
+  log_destination_type     = var.flow_log_destination_type
+  log_destination          = local.flow_log_destination_arn
+  log_format               = var.flow_log_log_format
+  iam_role_arn             = local.flow_log_iam_role_arn
+  traffic_type             = var.flow_log_traffic_type
+  vpc_id                   = local.vpc_id
+  max_aggregation_interval = var.flow_log_max_aggregation_interval
 
   tags = merge(var.tags, var.vpc_flow_log_tags)
 }
@@ -44,8 +45,9 @@ resource "aws_cloudwatch_log_group" "flow_log" {
 resource "aws_iam_role" "vpc_flow_log_cloudwatch" {
   count = local.create_flow_log_cloudwatch_iam_role ? 1 : 0
 
-  name_prefix        = "vpc-flow-log-role-"
-  assume_role_policy = data.aws_iam_policy_document.flow_log_cloudwatch_assume_role[0].json
+  name_prefix          = "vpc-flow-log-role-"
+  assume_role_policy   = data.aws_iam_policy_document.flow_log_cloudwatch_assume_role[0].json
+  permissions_boundary = var.vpc_flow_log_permissions_boundary
 
   tags = merge(var.tags, var.vpc_flow_log_tags)
 }

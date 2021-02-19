@@ -61,6 +61,11 @@ module "vpc" {
   ssm_endpoint_private_dns_enabled = true
   ssm_endpoint_security_group_ids  = [data.aws_security_group.default.id]
 
+  # VPC endpoint for Lambda
+  enable_lambda_endpoint              = true
+  lambda_endpoint_private_dns_enabled = true
+  lambda_endpoint_security_group_ids  = [data.aws_security_group.default.id]
+
   # VPC endpoint for SSMMESSAGES
   enable_ssmmessages_endpoint              = true
   ssmmessages_endpoint_private_dns_enabled = true
@@ -101,15 +106,26 @@ module "vpc" {
   ecs_telemetry_endpoint_private_dns_enabled = true
   ecs_telemetry_endpoint_security_group_ids  = [data.aws_security_group.default.id]
 
-  # VPC endpoint for SQS
-  enable_sqs_endpoint              = true
-  sqs_endpoint_private_dns_enabled = true
-  sqs_endpoint_security_group_ids  = [data.aws_security_group.default.id]
+  # VPC endpoint for CodeDeploy
+  enable_codedeploy_endpoint              = true
+  codedeploy_endpoint_private_dns_enabled = true
+  codedeploy_endpoint_security_group_ids  = [data.aws_security_group.default.id]
+
+  # VPC endpoint for CodeDeploy Commands Secure
+  enable_codedeploy_commands_secure_endpoint              = true
+  codedeploy_commands_secure_endpoint_private_dns_enabled = true
+  codedeploy_commands_secure_endpoint_security_group_ids  = [data.aws_security_group.default.id]
+
+  # Default security group - ingress/egress rules cleared to deny all
+  manage_default_security_group  = true
+  default_security_group_ingress = [{}]
+  default_security_group_egress  = [{}]
 
   # VPC Flow Logs (Cloudwatch log group and IAM role will be created)
   enable_flow_log                      = true
   create_flow_log_cloudwatch_log_group = true
   create_flow_log_cloudwatch_iam_role  = true
+  flow_log_max_aggregation_interval    = 60
 
   tags = {
     Owner       = "user"
@@ -122,4 +138,3 @@ module "vpc" {
     Endpoint = "true"
   }
 }
-
